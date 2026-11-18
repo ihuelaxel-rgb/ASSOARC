@@ -1,0 +1,57 @@
+# Compile la version iPhone d'ASSOA sur un Mac de GitHub (aucun Mac nécessaire au club).
+# À placer sur GitHub dans .github/workflows/ios.yml, puis : onglet « Actions » -> « Version iPhone » -> « Run workflow ».
+# Résultat : ASSOA-<version>-iPhone.ipa, NON SIGNÉ, dans « Artifacts » en bas de la page du résultat.
+# Il s'installe sur l'iPhone depuis le PC avec Sideloadly et un identifiant Apple (gratuit : à refaire tous les 7 jours).
+name: Version iPhone
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer Qt pour iOS (et Qt pour Mac, nécessaire aux outils de compilation)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.12.0"
+          host: mac
+          target: ios
+          arch: ios
+          modules: qtmultimedia
+          autodesktop: true
+          cache: true
+
+      - name: Configurer (projet Xcode)
+        run: |
+          # Fonctionne même si le projet est dans un sous-dossier du dépôt
+          SRC=$(dirname "$(find . -name CMakeLists.txt -maxdepth 3 -exec grep -l "project(ASSOAArc" {} \; | head -n 1)")
+          echo "SRC=$SRC" >> "$GITHUB_ENV"
+          HOST_QT="$(dirname "$QT_ROOT_DIR")/macos"
+          echo "Qt iOS : $QT_ROOT_DIR  /  Qt Mac : $HOST_QT"
+          "$QT_ROOT_DIR/bin/qt-cmake" -S "$SRC" -B build-ios -G Xcode \
+              -DQT_HOST_PATH="$HOST_QT" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compiler pour iPhone (sans signature)
+        run: |
+          cmake --build build-ios --config Release -- -sdk iphoneos \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tail -n 40
+          test -d "$(find build-ios -type d -name 'ASSOAArc.app' -path '*iphoneos*' | head -n 1)"
+
+      - name: Créer le fichier .ipa
+        run: |
+          APP=$(find build-ios -type d -name 'ASSOAArc.app' -path '*iphoneos*' | head -n 1)
+          VER=$(sed -n 's/^ *VERSION \([0-9.]*\).*/\1/p' "$SRC/CMakeLists.txt" | head -n 1)
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
+          zip -qry "ASSOA-$VER-iPhone.ipa" Payload
+          ls -la ./*.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: version-iPhone
+          path: "*.ipa"
